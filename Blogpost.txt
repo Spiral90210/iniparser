@@ -1,0 +1,150 @@
+INI -> JSON file translator
+
+Reads an ini file into json
+
+Starting point is that I want to take a file to translate some date stored in ini format into json to more easily consume. There's some info about an old game that I ocasionally play that's in .ini format, and I wanted to consume json, for no other reason than I fancied it.
+
+So taking a file with (Section names can have spaces!!)
+=================
+[Section1]
+property1=value1
+property2=value2
+#comment1
+
+[Section2]
+property3=value3
+//comment2
+;comment3
+===
+Into something like the following:
+================
+{
+	"Section1": {
+		"property1":"value1",
+		"property2":"value2"
+	},
+	"Section2":{
+		"property3":"value3""
+	}
+}
+
+Or perhaps,
+[{
+	"SectionName":"Section1",
+	"data":[{
+		"name":"proeprty1",
+		"value":"value1"
+	}]	
+}]
+===
+etc.
+
+So to learn a little more about python, I decided to use that!
+
+Firstly, need to define the command line interface. We need to specify the input file, and a switch to decide which type of json to write. So now how do I read these args? Python has an idiom: there should be one good obvious way to do something - In this case it's a thing called 'argparse'. 
+-Note it's possible to use sys.argv to access the command line args directly, but that's all you get, argparse deals with validation/defaults/named args/positional args, it's definitly a better way!
+
+This is a framework provided class that manages parsing command line arguments. It's actually dead good. By default it will deal with passing --help or -h, this will print out details about the command line args. To access argparse, you need to import argparse, then initialise and get the args with:
+===================
+import argparse
+
+parser = argparse.ArgumentParser(description='Converts an ini file into a json object.')
+parser.add_argument('input', help='The .ini file to transform into a json object e.g. ./input.ini')
+parser.add_argument('-p', '--parseType', help='0 parses to an object, 1 parses to an array.', type=int, choices=[0, 1], default=0)
+args = parser.parse_args()
+====
+The 'args' object will now contain the args as properties (without the --!) like
+args.input
+args.parseType
+
+Super.
+
+Next we need to read the file line by line WITHOUT reading into memory all at once! This is done by
+==================
+with open(args.input) as file:
+    for line in file:
+    	#do something with line here
+====
+Using 'with' takes care of closing the file handle when we are done. There is a catch with this though, the read line will also include the \n newline character, and also empty lines. To skip these we can just
+==================
+with open(args.input) as file:
+    for line in file:
+        line = line.strip()
+        if line.__len__() == 0:
+            continue
+        #our code here can assume line is not empty and will not have a newline char at the end!
+====
+Super dooper. Now we need to read the lines and convert to json
+
+1. Read the [Sections] into a class
+2. Pass the class to a json formatter to print
+3. Create the 2 json formatters that we neeed
+
+
+
+Mentioned previously about writing different formats of json. In c# or java I would be looking to create an interface. In python, I'll be using an abstract base class, and declaring the methods that I want my writers to implement as abstract. This code snippet should be enough:
+===============
+from abc import ABCMeta, abstractmethod
+
+
+class BaseSectionWriter(metaclass=ABCMeta):
+    __metaclass__ = ABCMeta
+
+    def __init__(self):
+        pass
+
+    @abstractmethod
+    def write_section(self, section):
+        pass
+
+    @abstractmethod
+    def close(self):
+        pass
+====
+
+
+We can then write an implementation for this like the following (actual json detail removed - you can see that in the source files):
+===================
+class ArrayWriter(BaseSectionWriter):
+
+    def __init__(self, filename):
+    	#make sure to call the base class constructor
+        super(BaseSectionWriter, self).__init__()
+        #open a file handle that the write_section method can use through the lifetime of the object
+        self.file = open(filename, 'w')
+
+    def close(self):
+        #close the file handle
+        self.file.close()
+
+    def write_section(self, section):
+    	#write an INISection to the file
+    	self.write('...')
+
+    def write(self, string):
+    	#utility function for writing so I can trace the output in the console while developing
+        self.file.write(string)
+        print(string)
+=====
+The full implementation is sloppy and error prone that's easily broken, but it will do the job for what I need. Notice the open file handle that's maintained as an instance field - this needs to be closed properly. We could of course use a try/finally to ensure close() is called, but what about that cool 'with' statement that we used to open the file? I would use a using pattern in c# and autoclosable in java, so why not here? To do this, we need to implement a 'contextmanager' for our writer implementation. This is a function that is marked with a @contextmanager attribute and will yield an instance of the writer, and make sure it's closed when it goes out of scope. I did it like this:
+
+====================
+@contextmanager
+def create_writer(writertype, filename):
+
+    if writertype == 0:
+        writer = ArrayWriter(filename)
+    else:
+        writer = ObjectWriter(filename)
+
+    try:
+        yield writer
+    finally:
+        writer.close()
+====
+
+This means I can use it like this 'with JsonWriters.create_writer(args.parseType, out_name) as writer:' in our main script, and the close() method will be called automatically. Isnt that cool? Definitly makes the code neater, even if it took a while to understand how to do it!
+
+The actual looping through each line of the file and writing the json you can see in the github source - it's kind of incidental really. In writing this wee utility (that would have taken a fraction of the time in a language I already knew!) I managed to be exposed to a decent set of core Python functionality. Now I don't think for one mintue that it's 'correct' (it's definitly not robust anyway!), being new to a language there's bound to be something taboo that I've done. So feel free to fork/pull request etc. to show me what I've not done correctly, only way I'll learn!
+
+To make this a fully fledged parser, there's a lot of things I could add to configure - how should comment lines/sections start/end, more control over the output json (e.g. whitespace handling for property names, property names themselves, what to do with section headers). I might do something in the future about reading a config file, feel free to fork and DIY if you think this could be something you could do with!
